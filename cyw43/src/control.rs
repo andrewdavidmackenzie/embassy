@@ -11,7 +11,7 @@ use crate::fmt::Bytes;
 use crate::ioctl::{IoctlState, IoctlType};
 use crate::structs::*;
 use crate::{countries, events, PowerManagementMode};
-use crate::control::WpaSecurity::{Wpa2AuthPsk, Wpa3AuthSaePsk};
+use crate::control::WpaSecurity::{Wpa2AuthPsk, Wpa3AuthSaePsk, WpaAny};
 
 /// Control errors.
 #[derive(Debug)]
@@ -319,6 +319,31 @@ impl<'a> Control<'a> {
         };
         pfi.passphrase[..psk.len()].copy_from_slice(psk);
         self.join_wpa_passphrase_info(ssid, &pfi, Wpa3AuthSaePsk).await
+    }
+
+
+    /// Join a WPA protected network with the provided ssid and passphrase.
+    /// This will allow  WPA, WPA2 or WPA3 security
+    pub async fn join_wpa_any(&mut self, ssid: &str, passphrase: &str) -> Result<(), Error> {
+        let mut pfi = PassphraseInfo {
+            len: passphrase.len() as _,
+            flags: 1,
+            passphrase: [0; 64],
+        };
+        pfi.passphrase[..passphrase.len()].copy_from_slice(passphrase.as_bytes());
+        self.join_wpa_passphrase_info(ssid, &pfi, WpaAny).await
+    }
+
+    /// Join a WPA protected network with the provided ssid and precomputed PSK.
+    /// This will allow  WPA, WPA2 or WPA3 security
+    pub async fn join_wpa_any_psk(&mut self, ssid: &str, psk: &[u8; 32]) -> Result<(), Error> {
+        let mut pfi = PassphraseInfo {
+            len: psk.len() as _,
+            flags: 0,
+            passphrase: [0; 64],
+        };
+        pfi.passphrase[..psk.len()].copy_from_slice(psk);
+        self.join_wpa_passphrase_info(ssid, &pfi, WpaAny).await
     }
 
     async fn wait_for_join(&mut self, i: SsidInfo) -> Result<(), Error> {
