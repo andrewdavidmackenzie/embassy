@@ -11,6 +11,7 @@ use crate::fmt::Bytes;
 use crate::ioctl::{IoctlState, IoctlType};
 use crate::structs::*;
 use crate::{countries, events, PowerManagementMode};
+use crate::control::WpaSecurity::{Wpa2AuthPsk, Wpa3AuthSaePsk};
 
 /// Control errors.
 #[derive(Debug)]
@@ -42,9 +43,18 @@ pub enum ScanType {
     Passive,
 }
 
+#[allow(dead_code)]
+enum WpaSecurity {
+    None,
+    WpaAuthPsk = 0x0004,
+    Wpa2AuthPsk = 0x0080,
+    Wpa3AuthSaePsk = 0x40000,
+    WpaAny = (0x0004 | 0x0080 | 0x40000)
+}
+
 /// Scan options.
 #[derive(Clone)]
-#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+#[cfg_attr(feature = "deft", derive(defmt::Format))]
 pub struct ScanOptions {
     /// SSID to scan for.
     pub ssid: Option<heapless::String<32>>,
@@ -235,7 +245,8 @@ impl<'a> Control<'a> {
     }
 
     /// Join a protected network with the provided ssid and [`PassphraseInfo`].
-    async fn join_wpa2_passphrase_info(&mut self, ssid: &str, passphrase_info: &PassphraseInfo) -> Result<(), Error> {
+    async fn join_wpa_passphrase_info(&mut self, ssid: &str, passphrase_info: &PassphraseInfo,
+        security: WpaSecurity) -> Result<(), Error> {
         self.set_iovar_u32("ampdu_ba_wsize", 8).await;
 
         self.ioctl_set_u32(134, 0, 4).await; // wsec = wpa2
@@ -255,7 +266,7 @@ impl<'a> Control<'a> {
 
         self.ioctl_set_u32(20, 0, 1).await; // set_infra = 1
         self.ioctl_set_u32(22, 0, 0).await; // set_auth = 0 (open)
-        self.ioctl_set_u32(165, 0, 0x80).await; // set_wpa_auth
+        self.ioctl_set_u32(165, 0, security as u32).await; // set_wpa_auth
 
         let mut i = SsidInfo {
             len: ssid.len() as _,
@@ -266,7 +277,7 @@ impl<'a> Control<'a> {
         self.wait_for_join(i).await
     }
 
-    /// Join a protected network with the provided ssid and passphrase.
+    /// Join a WPA2 protected network with the provided ssid and passphrase.
     pub async fn join_wpa2(&mut self, ssid: &str, passphrase: &str) -> Result<(), Error> {
         let mut pfi = PassphraseInfo {
             len: passphrase.len() as _,
@@ -274,10 +285,10 @@ impl<'a> Control<'a> {
             passphrase: [0; 64],
         };
         pfi.passphrase[..passphrase.len()].copy_from_slice(passphrase.as_bytes());
-        self.join_wpa2_passphrase_info(ssid, &pfi).await
+        self.join_wpa_passphrase_info(ssid, &pfi, Wpa2AuthPsk).await
     }
 
-    /// Join a protected network with the provided ssid and precomputed PSK.
+    /// Join a WPA2 protected network with the provided ssid and precomputed PSK.
     pub async fn join_wpa2_psk(&mut self, ssid: &str, psk: &[u8; 32]) -> Result<(), Error> {
         let mut pfi = PassphraseInfo {
             len: psk.len() as _,
@@ -285,7 +296,29 @@ impl<'a> Control<'a> {
             passphrase: [0; 64],
         };
         pfi.passphrase[..psk.len()].copy_from_slice(psk);
-        self.join_wpa2_passphrase_info(ssid, &pfi).await
+        self.join_wpa_passphrase_info(ssid, &pfi, Wpa2AuthPsk).await
+    }
+
+    /// Join a WPA3 protected network with the provided ssid and passphrase.
+    pub async fn join_wpa3(&mut self, ssid: &str, passphrase: &str) -> Result<(), Error> {
+        let mut pfi = PassphraseInfo {
+            len: passphrase.len() as _,
+            flags: 1,
+            passphrase: [0; 64],
+        };
+        pfi.passphrase[..passphrase.len()].copy_from_slice(passphrase.as_bytes());
+        self.join_wpa_passphrase_info(ssid, &pfi, Wpa3AuthSaePsk).await
+    }
+
+    /// Join a WPA3 protected network with the provided ssid and precomputed PSK.
+    pub async fn join_wpa3_psk(&mut self, ssid: &str, psk: &[u8; 32]) -> Result<(), Error> {
+        let mut pfi = PassphraseInfo {
+            len: psk.len() as _,
+            flags: 0,
+            passphrase: [0; 64],
+        };
+        pfi.passphrase[..psk.len()].copy_from_slice(psk);
+        self.join_wpa_passphrase_info(ssid, &pfi, Wpa3AuthSaePsk).await
     }
 
     async fn wait_for_join(&mut self, i: SsidInfo) -> Result<(), Error> {
