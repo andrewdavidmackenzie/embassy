@@ -54,7 +54,7 @@ enum WpaSecurity {
 
 /// Scan options.
 #[derive(Clone)]
-#[cfg_attr(feature = "deft", derive(defmt::Format))]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct ScanOptions {
     /// SSID to scan for.
     pub ssid: Option<heapless::String<32>>,
