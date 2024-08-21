@@ -45,7 +45,7 @@ pub enum ScanType {
 
 #[allow(dead_code)]
 enum WpaSecurity {
-    None,
+    Open = 0x0000,
     WpaAuthPsk = 0x0004,
     Wpa2AuthPsk = 0x0080,
     Wpa3AuthSaePsk = 0x40000,
