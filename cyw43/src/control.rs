@@ -11,7 +11,7 @@ use crate::fmt::Bytes;
 use crate::ioctl::{IoctlState, IoctlType};
 use crate::structs::*;
 use crate::{countries, events, PowerManagementMode};
-use crate::control::WpaSecurity::{Wpa2AuthPsk, Wpa3AuthSaePsk, WpaAny};
+use crate::control::WpaSecurity::{Wpa2Auth, Wpa3AuthSae, WpaAny};
 
 /// Control errors.
 #[derive(Debug)]
@@ -46,9 +46,9 @@ pub enum ScanType {
 #[allow(dead_code)]
 enum WpaSecurity {
     Open = 0x0000,
-    WpaAuthPsk = 0x0004,
-    Wpa2AuthPsk = 0x0080,
-    Wpa3AuthSaePsk = 0x40000,
+    WpaAuth = 0x0004,
+    Wpa2Auth = 0x0080,
+    Wpa3AuthSae = 0x40000,
     WpaAny = (0x0004 | 0x0080 | 0x40000)
 }
 
@@ -285,7 +285,7 @@ impl<'a> Control<'a> {
             passphrase: [0; 64],
         };
         pfi.passphrase[..passphrase.len()].copy_from_slice(passphrase.as_bytes());
-        self.join_wpa_passphrase_info(ssid, &pfi, Wpa2AuthPsk).await
+        self.join_wpa_passphrase_info(ssid, &pfi, Wpa2Auth).await
     }
 
     /// Join a WPA2 protected network with the provided ssid and precomputed PSK.
@@ -296,7 +296,7 @@ impl<'a> Control<'a> {
             passphrase: [0; 64],
         };
         pfi.passphrase[..psk.len()].copy_from_slice(psk);
-        self.join_wpa_passphrase_info(ssid, &pfi, Wpa2AuthPsk).await
+        self.join_wpa_passphrase_info(ssid, &pfi, Wpa2Auth).await
     }
 
     /// Join a WPA3 protected network with the provided ssid and passphrase.
@@ -307,7 +307,7 @@ impl<'a> Control<'a> {
             passphrase: [0; 64],
         };
         pfi.passphrase[..passphrase.len()].copy_from_slice(passphrase.as_bytes());
-        self.join_wpa_passphrase_info(ssid, &pfi, Wpa3AuthSaePsk).await
+        self.join_wpa_passphrase_info(ssid, &pfi, Wpa3AuthSae).await
     }
 
     /// Join a WPA3 protected network with the provided ssid and precomputed PSK.
@@ -318,7 +318,7 @@ impl<'a> Control<'a> {
             passphrase: [0; 64],
         };
         pfi.passphrase[..psk.len()].copy_from_slice(psk);
-        self.join_wpa_passphrase_info(ssid, &pfi, Wpa3AuthSaePsk).await
+        self.join_wpa_passphrase_info(ssid, &pfi, Wpa3AuthSae).await
     }
 
 
