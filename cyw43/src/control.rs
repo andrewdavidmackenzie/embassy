@@ -1,4 +1,4 @@
-use core::cmp::{max, min};
+use core::cmp::{max, min, PartialEq};
 use core::iter::zip;
 
 use embassy_net_driver_channel as ch;
@@ -11,7 +11,8 @@ use crate::fmt::Bytes;
 use crate::ioctl::{IoctlState, IoctlType};
 use crate::structs::*;
 use crate::{countries, events, PowerManagementMode};
-use crate::control::WpaSecurity::{Wpa2Auth, Wpa3AuthSae, WpaAny};
+use crate::control::AuthType::{Wpa2AesPsk, Wpa3SaeAesPsk};
+use crate::control::WpaAuth::{Open, Wpa2AuthPsk, Wpa3AuthSaePsk, WpaAny, WpaAuthPsk};
 
 /// Control errors.
 #[derive(Debug)]
@@ -44,12 +45,42 @@ pub enum ScanType {
 }
 
 #[allow(dead_code)]
-enum WpaSecurity {
+/*
+See https://github.com/georgerobotics/cyw43-driver/blob/main/src/cyw43_ll.c#L279C1-L282C42
+for reference:
+// Values used for STA and AP auth settings
+#define CYW43_WPA_AUTH_PSK (0x0004)
+#define CYW43_WPA2_AUTH_PSK (0x0080)
+#define CYW43_WPA3_AUTH_SAE_PSK (0x40000)
+ */
+enum WpaAuth {
     Open = 0x0000,
-    WpaAuth = 0x0004,
-    Wpa2Auth = 0x0080,
-    Wpa3AuthSae = 0x40000,
+    WpaAuthPsk = 0x0004,
+    Wpa2AuthPsk = 0x0080,
+    Wpa3AuthSaePsk = 0x40000,
     WpaAny = (0x0004 | 0x0080 | 0x40000)
+}
+
+/*
+See https://github.com/georgerobotics/cyw43-driver/blob/main/src/cyw43_ll.h#L169
+for reference
+// Auth types definition
+#define CYW43_AUTH_OPEN (0)                     ///< No authorisation required (open)
+#define CYW43_AUTH_WPA_TKIP_PSK   (0x00200002)  ///< WPA authorisation
+#define CYW43_AUTH_WPA2_AES_PSK   (0x00400004)  ///< WPA2 authorisation (preferred)
+#define CYW43_AUTH_WPA2_MIXED_PSK (0x00400006)  ///< WPA2/WPA mixed authorisation
+#define CYW43_AUTH_WPA3_SAE_AES_PSK  (0x01000004)   ///< WPA3 AES authorisation
+#define CYW43_AUTH_WPA3_WPA2_AES_PSK (0x01400004)   ///< WPA2/WPA3 authorisation
+ */
+#[derive(PartialEq, Clone, Copy)]
+#[allow(dead_code)]
+enum AuthType {
+    Open = 0,
+    WpaTkipPsk = 0x00200002,
+    Wpa2AesPsk = 0x00400004,
+    Wpa2MixedPsk = 0x00400006,
+    Wpa3SaeAesPsk = 0x01000004,
+    Wpa3Wpa2AesPsk = 0x01400004,
 }
 
 /// Scan options.
@@ -166,7 +197,6 @@ impl<'a> Control<'a> {
         self.set_iovar_u32("ampdu_mpdu", 4).await;
         Timer::after_millis(100).await;
         //self.set_iovar_u32("ampdu_rx_factor", 0).await; // this crashes
-
         //Timer::after_millis(100).await;
 
         // evts
@@ -246,16 +276,51 @@ impl<'a> Control<'a> {
 
     /// Join a protected network with the provided ssid and [`PassphraseInfo`].
     async fn join_wpa_passphrase_info(&mut self, ssid: &str, passphrase_info: &PassphraseInfo,
-        security: WpaSecurity) -> Result<(), Error> {
+                                      auth_type: AuthType) -> Result<(), Error> {
         self.set_iovar_u32("ampdu_ba_wsize", 8).await;
 
-        self.ioctl_set_u32(134, 0, 4).await; // wsec = wpa2
-        self.set_iovar_u32x2("bsscfg:sup_wpa", 0, 1).await;
+        // Set `wpa_auth` [WpaAuth] according to `auth_type` [AuthType]
+        let wpa_auth = match auth_type {
+            AuthType::Open => Open,
+            AuthType::WpaTkipPsk => WpaAuthPsk,
+            AuthType::Wpa2AesPsk | AuthType::Wpa2MixedPsk => Wpa2AuthPsk,
+            AuthType::Wpa3SaeAesPsk | AuthType::Wpa3Wpa2AesPsk => Wpa3AuthSaePsk,
+        };
+
+        // Set wsec to lower byte of `auth_type`
+        self.ioctl_set_u32(134, 0, auth_type as u32 & 0xff).await;
+
+        // Set sup_wpa to 0 if Open, or 1 if not Open (secured)
+        self.set_iovar_u32x2("bsscfg:sup_wpa", 0, (auth_type != AuthType::Open) as u32).await;
+
         self.set_iovar_u32x2("bsscfg:sup_wpa2_eapver", 0, 0xFFFF_FFFF).await;
+
+        // set sup_wpa_tmo - WPA Timeout to 2500
         self.set_iovar_u32x2("bsscfg:sup_wpa_tmo", 0, 2500).await;
 
         Timer::after_millis(100).await;
 
+        /* TODO review
+        Not sure if the code below covers the WPA3 case done with this code in the C driver
+            if (auth_type != CYW43_AUTH_OPEN && auth_type != CYW43_AUTH_WPA3_SAE_AES_PSK) {
+                // wwd_wifi_set_passphrase
+                cyw43_put_le16(buf, key_len);
+                cyw43_put_le16(buf + 2, 1);
+                memcpy(buf + 4, key, key_len);
+                cyw43_delay_ms(2); // Delay required to allow radio firmware to be ready to receive PMK and avoid intermittent failure
+
+                CYW43_VDEBUG("Setting wsec_pmk %d\n", key_len);
+                cyw43_do_ioctl(self, SDPCM_SET, WLC_SET_WSEC_PMK, 4 + CYW43_WPA_MAX_PASSWORD_LEN, buf, WWD_STA_INTERFACE); // 68, see wsec_pmk_t
+            }
+
+            if (wpa_auth == CYW43_WPA3_AUTH_SAE_PSK) {
+                memset(buf, 0, 2 + CYW43_WPA_SAE_MAX_PASSWORD_LEN);
+                cyw43_put_le16(buf, key_len);
+                memcpy(buf + 2, key, key_len);
+                cyw43_delay_ms(2); // Delay required to allow radio firmware to be ready to receive PMK and avoid intermittent failure
+                cyw43_write_iovar_n(self, "sae_password", 2 + CYW43_WPA_SAE_MAX_PASSWORD_LEN, buf, WWD_STA_INTERFACE);
+            }
+         */
         self.ioctl(
             IoctlType::Set,
             IOCTL_CMD_SET_PASSPHRASE,
@@ -265,8 +330,16 @@ impl<'a> Control<'a> {
         .await; // WLC_SET_WSEC_PMK
 
         self.ioctl_set_u32(20, 0, 1).await; // set_infra = 1
+
+        /* // TODO C code below to see if our rust code is correct?
+            // set auth type
+            CYW43_VDEBUG("Setting auth\n");
+            cyw43_set_ioctl_u32(self, WLC_SET_AUTH, (wpa_auth == CYW43_WPA3_AUTH_SAE_PSK) ? AUTH_TYPE_SAE : AUTH_TYPE_OPEN, WWD_STA_INTERFACE);
+            cyw43_write_iovar_u32(self, "mfp", (wpa_auth == CYW43_WPA2_AUTH_PSK || wpa_auth == CYW43_WPA3_AUTH_SAE_PSK) ? MFP_CAPABLE : MFP_NONE, WWD_STA_INTERFACE);
+         */
         self.ioctl_set_u32(22, 0, 0).await; // set_auth = 0 (open)
-        self.ioctl_set_u32(165, 0, security as u32).await; // set_wpa_auth
+
+        self.ioctl_set_u32(165, 0, wpa_auth as u32).await; // set_wpa_auth
 
         let mut i = SsidInfo {
             len: ssid.len() as _,
@@ -285,7 +358,7 @@ impl<'a> Control<'a> {
             passphrase: [0; 64],
         };
         pfi.passphrase[..passphrase.len()].copy_from_slice(passphrase.as_bytes());
-        self.join_wpa_passphrase_info(ssid, &pfi, Wpa2Auth).await
+        self.join_wpa_passphrase_info(ssid, &pfi, Wpa2AesPsk).await // TODO correct?
     }
 
     /// Join a WPA2 protected network with the provided ssid and precomputed PSK.
@@ -296,7 +369,7 @@ impl<'a> Control<'a> {
             passphrase: [0; 64],
         };
         pfi.passphrase[..psk.len()].copy_from_slice(psk);
-        self.join_wpa_passphrase_info(ssid, &pfi, Wpa2Auth).await
+        self.join_wpa_passphrase_info(ssid, &pfi, Wpa2AesPsk).await
     }
 
     /// Join a WPA3 protected network with the provided ssid and passphrase.
@@ -307,7 +380,7 @@ impl<'a> Control<'a> {
             passphrase: [0; 64],
         };
         pfi.passphrase[..passphrase.len()].copy_from_slice(passphrase.as_bytes());
-        self.join_wpa_passphrase_info(ssid, &pfi, Wpa3AuthSae).await
+        self.join_wpa_passphrase_info(ssid, &pfi, Wpa3SaeAesPsk).await // TODO correct?
     }
 
     /// Join a WPA3 protected network with the provided ssid and precomputed PSK.
@@ -318,32 +391,7 @@ impl<'a> Control<'a> {
             passphrase: [0; 64],
         };
         pfi.passphrase[..psk.len()].copy_from_slice(psk);
-        self.join_wpa_passphrase_info(ssid, &pfi, Wpa3AuthSae).await
-    }
-
-
-    /// Join a WPA protected network with the provided ssid and passphrase.
-    /// This will allow  WPA, WPA2 or WPA3 security
-    pub async fn join_wpa_any(&mut self, ssid: &str, passphrase: &str) -> Result<(), Error> {
-        let mut pfi = PassphraseInfo {
-            len: passphrase.len() as _,
-            flags: 1,
-            passphrase: [0; 64],
-        };
-        pfi.passphrase[..passphrase.len()].copy_from_slice(passphrase.as_bytes());
-        self.join_wpa_passphrase_info(ssid, &pfi, WpaAny).await
-    }
-
-    /// Join a WPA protected network with the provided ssid and precomputed PSK.
-    /// This will allow  WPA, WPA2 or WPA3 security
-    pub async fn join_wpa_any_psk(&mut self, ssid: &str, psk: &[u8; 32]) -> Result<(), Error> {
-        let mut pfi = PassphraseInfo {
-            len: psk.len() as _,
-            flags: 0,
-            passphrase: [0; 64],
-        };
-        pfi.passphrase[..psk.len()].copy_from_slice(psk);
-        self.join_wpa_passphrase_info(ssid, &pfi, WpaAny).await
+        self.join_wpa_passphrase_info(ssid, &pfi, Wpa3SaeAesPsk).await
     }
 
     async fn wait_for_join(&mut self, i: SsidInfo) -> Result<(), Error> {
