@@ -43,7 +43,6 @@ pub enum ScanType {
     Passive,
 }
 
-#[derive(Copy, Clone)]
 #[allow(dead_code)]
 enum WpaSecurity {
     Open = 0x0000,
@@ -250,7 +249,7 @@ impl<'a> Control<'a> {
         security: WpaSecurity) -> Result<(), Error> {
         self.set_iovar_u32("ampdu_ba_wsize", 8).await;
 
-        self.ioctl_set_u32(134, 0, security as u32).await; // wsec = security
+        self.ioctl_set_u32(134, 0, 4).await; // wsec = wpa2
         self.set_iovar_u32x2("bsscfg:sup_wpa", 0, 1).await;
         self.set_iovar_u32x2("bsscfg:sup_wpa2_eapver", 0, 0xFFFF_FFFF).await;
         self.set_iovar_u32x2("bsscfg:sup_wpa_tmo", 0, 2500).await;
