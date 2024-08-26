@@ -435,7 +435,7 @@ impl<'a> Control<'a> {
         self.set_iovar_u32x2("bsscfg:wsec", 0, (security as u32) & 0xFF).await;
 
         if security != Security::OPEN {
-            self.set_iovar_u32x2("bsscfg:wpa_auth", 0, 0x0084).await; // wpa_auth = WPA2_AUTH_PSK | WPA_AUTH_PSK
+            self.set_iovar_u32x2("bsscfg:wpa_auth", 0, WpaAny as u32).await; // wpa_auth = WPA2_AUTH_PSK | WPA_AUTH_PSK | WPA3_AUTH_PSK
 
             Timer::after_millis(100).await;
 
